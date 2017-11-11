@@ -1,64 +1,66 @@
 from mxnet.gluon import nn
-from mxnet.gluon import loss
+from mxnet.gluon.loss import Loss, L2Loss
 from mxnet import nd
 from CapsuleLayer import CapsuleConv, CapsuleDense
 
-class CapsuleNet(nn.Block):
+class CapsuleNet(nn.HybridBlock):
     def __init__(self, *args, **kwargs):
         super(CapsuleNet, self).__init__(**kwargs)
 
         with self.name_scope():
             
-            conv1 = nn.Sequential()
+            conv1 = nn.HybridSequential()
             conv1.add(
                 # Conv1
                 nn.Conv2D(256,kernel_size=9, strides=2, activation='relu')
             )
             
-            primary = nn.Sequential()
+            primary = nn.HybridSequential()
             primary.add(
-                primary_capsules = CapsuleConv(dim_vector=8,out_channels=32,
-                                    kernel_size=9, stride=2)
+                CapsuleConv(dim_vector=8,out_channels=32,
+                                    kernel_size=9, strides=2)
             )
 
-            digit = nn.Sequential()
+            digit = nn.HybridSequential()
             digit.add(
-                digit_capsules = CapsuleDense(dim_vector=16, dim_input_vector=8,
+                CapsuleDense(dim_vector=16, dim_input_vector=8,
                                             out_channels=10, num_routing_iter=3)
             )
             
-            decoder_module = nn.Sequential()
+            decoder_module = nn.HybridSequential()
             decoder_module.add(
                         nn.Dense(512, activation='relu'),
                         nn.Dense(1024, activation='relu'),
                         nn.Dense(784, activation='sigmoid'))
 
-            self.net = nn.Sequential()
+            self.net = nn.HybridSequential()
             self.net.add(conv1, primary, digit, decoder_module)
     
-    def forward(self, X, y=None):
+    def hybrid_forward(self, F, X, y=None):
         X = self.net[0](X) # Conv1
         X = self.net[1](X) # Primary Capsule
         X = self.net[2](X) # Digital Capsule
 
-        X = X.reshape((X.shape(0),X.shape(2), X.shape(4)))
+        X = X.reshape((X.shape[0],X.shape[2], X.shape[4]))
         # get length of vector for margin loss calculation
         X_l2norm = nd.sqrt(X**2).sum(axis=-1)
-
+        prob = nd.softmax(X_l2norm, axis=-1)
 
         if y is not None:
             max_len_indices = y
         else:
-            prob = nd.softmax(X_l2norm, axis=-1)
+            
             max_len_indices = nd.argmax(prob,axis=-1)
-        
-        batch_activated_capsules = X[range(X.shape[0]),max_len_indices.astype('int32')]
+
+
+        y_tile = nd.tile(y.expand_dims(axis=1), reps=(1, X.shape[-1]))
+        batch_activated_capsules = nd.pick(X, y_tile, axis=1, keepdims=True)
 
         reconstrcutions = self.net[3](batch_activated_capsules)
 
-        return  X_l2norm, reconstrcutions
+        return  prob, X_l2norm, reconstrcutions
 
-class CapsuleLoss(loss.Loss):
+class CapsuleLoss(Loss):
     """Calculates total loss for CapsuleNet between output and label:
 
     .. math::
@@ -81,12 +83,21 @@ class CapsuleLoss(loss.Loss):
     """
     def __init__(self, weight=1., batch_axis=0, **kwargs):
         super(CapsuleLoss, self).__init__(weight, batch_axis, **kwargs)
+        self.reconstrcution_loss = L2Loss()
 
-    def hybrid_forward(self, F, output, label, sample_weight=None):
-        label = _reshape_label_as_output(F, output, label)
-        loss = F.square(output - label)
-        loss = _apply_weighting(F, loss, self._weight/2, sample_weight)
-        return F.mean(loss, axis=self._batch_axis, exclude=True)
+    def hybrid_forward(self, F, images, num_classes, labels, X_l2norm, reconstrcutions,
+                    lambda_value = 0.5, scale_factor=0.0005, sample_weight=None):
+        self.num_classes = num_classes
+        labels_onehot = nd.one_hot(labels, num_classes)
+        first_term_base = F.square(nd.maximum(0.9-X_l2norm,0))
+        second_term_base = F.square(nd.maximum(X_l2norm -0.1, 0))
+        margin_loss = labels_onehot * first_term_base + lambda_value * (1-labels_onehot) * second_term_base
+        margin_loss = margin_loss.sum(axis=1)#.expand_dims(axis=1)
+
+        reconstrcution_loss = self.reconstrcution_loss(reconstrcutions, images)
+        loss = F.mean(margin_loss, axis=self._batch_axis, exclude=True) + scale_factor * reconstrcution_loss
+        # label = _reshape_label_as_output(F, output, label)
+        # loss = F.square(output - label)
+        # loss = _apply_weighting(F, loss, self._weight/2, sample_weight)
+        return loss #F.mean(loss, axis=self._batch_axis, exclude=True)
     
-    def hybrid_forward(self, F, images, labels, X_l2norm, reconstrcutions,
-                            lambda_value=0.5, scalar_factor=0.0005)

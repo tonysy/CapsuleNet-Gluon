@@ -1,13 +1,15 @@
 from collections import OrderedDict
+import mxnet as mx 
 from mxnet.gluon import nn
 import mxnet.ndarray as nd
+from utils import concact_vectors_in_list
 
-class CapsuleConv(nn.Block):
-    def __init__(self,dim_vcetor, out_channels, kernel_size, 
+class CapsuleConv(nn.HybridBlock):
+    def __init__(self,dim_vector, out_channels, kernel_size, 
                         strides=1,padding=0):
         super(CapsuleConv, self).__init__()
         
-        self.capsules_index = ['dim_'+str(i) for i in range(dim_vcetor)]
+        self.capsules_index = ['dim_'+str(i) for i in range(dim_vector)]
         for idx in self.capsules_index:
             setattr(self, idx, nn.Conv2D(out_channels, 
                     kernel_size=kernel_size, strides=strides,
@@ -28,15 +30,15 @@ class CapsuleConv(nn.Block):
 
         return tensor_squashed
 
-    def forward(self, X):
+    def hybrid_forward(self,F, X):
                     
         outputs = [getattr(self,idx)(X).expand_dims(axis=-1) for idx in self.capsules_index]
 
-        outputs_cat = nd.concatenate(outputs, axis=4)
+        outputs_cat = concact_vectors_in_list(outputs, axis=4)
         outputs_squashed = self.squash(outputs_cat)
         return outputs_squashed
 
-class CapsuleDense(nn.Block):
+class CapsuleDense(nn.HybridBlock):
     def __init__(self, dim_vector, dim_input_vector, out_channels,
                         num_routing_iter=1):
         super(CapsuleDense, self).__init__()
@@ -62,7 +64,7 @@ class CapsuleDense(nn.Block):
 
         return tensor_squashed
 
-    def forward(self, X):
+    def hybrid_forward(self,F, X):
         # (batch_size, num_channel_prev, h, w, dim_vector)
         # -->(batch_size,num_capsule_prev,1,1,dim_vector)
         X = X.reshape((0, -1, 1, 1, 0))
@@ -80,7 +82,7 @@ class CapsuleDense(nn.Block):
             self.routing_weight_initial = False
         # (batch_size,num_capsule_prev,out_channels,dim_input_vector,dim_vector)
         # (64, 1152, 10, 8, 16)
-        W_tile = nd.tile(self.routing_weight, reps=(self.batch_size,1,1,1,1))
+        W_tile = nd.tile(self.routing_weight, reps=(self.batch_size,1,1,1,1)).as_in_context(mx.gpu(0))
         linear_combination_3d = nd.batch_dot(
                 X_tile.reshape((-1, X_tile.shape[-2], X_tile.shape[-1])), 
                 W_tile.reshape((-1, W_tile.shape[-2], W_tile.shape[-1])))

@@ -5,6 +5,7 @@ from six.moves.urllib.request import urlretrieve
 import gzip
 import shutil
 import idx2numpy
+import tarfile
 
 last_percent_reported = None
 
@@ -13,38 +14,38 @@ This File will download MNIST Dataset
 and convert it into .mat format (28 x 28)
 for using in the future
 '''
-url = 'http://yann.lecun.com/exdb/mnist/'
-mnist_dataset_location = "./data/MNIST/"
+# url = 'http://yann.lecun.com/exdb/mnist/'
+# mnist_dataset_location = "./data/MNIST/"
 
-def download_and_create_data() :
-    url = 'http://yann.lecun.com/exdb/mnist/'
-    mnist_dataset_location = "./data/MNIST/"
-    if not os.path.exists(mnist_dataset_location):
-        os.makedirs(mnist_dataset_location)
+# def download_and_create_data() :
+#     url = 'http://yann.lecun.com/exdb/mnist/'
+#     mnist_dataset_location = "./data/MNIST/"
+#     if not os.path.exists(mnist_dataset_location):
+#         os.makedirs(mnist_dataset_location)
 
-    train_images_zip = maybe_download(mnist_dataset_location, 'train-images-idx3-ubyte.gz')
-    train_labels_zip = maybe_download(mnist_dataset_location, 'train-labels-idx1-ubyte.gz')
+#     train_images_zip = maybe_download(mnist_dataset_location, 'train-images-idx3-ubyte.gz')
+#     train_labels_zip = maybe_download(mnist_dataset_location, 'train-labels-idx1-ubyte.gz')
 
-    test_images_zip = maybe_download(mnist_dataset_location, 't10k-images-idx3-ubyte.gz')
-    test_labels_zip = maybe_download(mnist_dataset_location, 't10k-labels-idx1-ubyte.gz')
+#     test_images_zip = maybe_download(mnist_dataset_location, 't10k-images-idx3-ubyte.gz')
+#     test_labels_zip = maybe_download(mnist_dataset_location, 't10k-labels-idx1-ubyte.gz')
 
-    print('MNIST Dataset Download Complete')
+#     print('MNIST Dataset Download Complete')
 
-    train_images_file = maybe_extract(mnist_dataset_location + 'train-images-idx3-ubyte.gz')
-    train_labels_file = maybe_extract(mnist_dataset_location + 'train-labels-idx1-ubyte.gz')
+#     train_images_file = maybe_extract(mnist_dataset_location + 'train-images-idx3-ubyte.gz')
+#     train_labels_file = maybe_extract(mnist_dataset_location + 'train-labels-idx1-ubyte.gz')
 
-    test_images_file = maybe_extract(mnist_dataset_location + 't10k-images-idx3-ubyte.gz')
-    test_labels_file = maybe_extract(mnist_dataset_location + 't10k-labels-idx1-ubyte.gz')
+#     test_images_file = maybe_extract(mnist_dataset_location + 't10k-images-idx3-ubyte.gz')
+#     test_labels_file = maybe_extract(mnist_dataset_location + 't10k-labels-idx1-ubyte.gz')
 
-    print('MNIST Dataset Extraction Complete')
+#     print('MNIST Dataset Extraction Complete')
 
-    train_images = idx2numpy.convert_from_file(mnist_dataset_location + 'train-images-idx3-ubyte')
-    train_label = idx2numpy.convert_from_file(mnist_dataset_location + 'train-labels-idx1-ubyte')
+#     train_images = idx2numpy.convert_from_file(mnist_dataset_location + 'train-images-idx3-ubyte')
+#     train_label = idx2numpy.convert_from_file(mnist_dataset_location + 'train-labels-idx1-ubyte')
 
-    test_images = idx2numpy.convert_from_file(mnist_dataset_location + 't10k-images-idx3-ubyte')
-    test_label = idx2numpy.convert_from_file(mnist_dataset_location + 't10k-labels-idx1-ubyte')
+#     test_images = idx2numpy.convert_from_file(mnist_dataset_location + 't10k-images-idx3-ubyte')
+#     test_label = idx2numpy.convert_from_file(mnist_dataset_location + 't10k-labels-idx1-ubyte')
 
-    return train_images, train_label, test_images, test_label
+#     return train_images, train_label, test_images, test_label
 
 def download_progress_hook(count, blockSize, totalSize):
     """A hook to report the progress of a download. This is mostly intend for users with slow internet connections. Reports every 1% change in download progress.
@@ -62,7 +63,7 @@ def download_progress_hook(count, blockSize, totalSize):
         
         last_percent_reported = percent
     
-def maybe_download(path, filename, force=False):
+def maybe_download(path,url, filename, force=False):
     """Download a file if not present, and make sure it's the right size"""
     if force or not os.path.exists(path + filename):
         print('Attempting to download:', filename)
@@ -88,5 +89,12 @@ def maybe_extract(filename, force=False):
     
     data_folders = outfile
     print(data_folders)
-
     return data_folders
+
+def maybe_extract_tar(filename, dstPath):
+    tarHandle = tarfile.open(filename, 'r:gz')
+    for filename in tarHandle.getnames():
+        print(filename)
+    tarHandle.extractall(dstPath)
+    tarHandle.close()
+
