@@ -2,7 +2,6 @@ from collections import OrderedDict
 import mxnet as mx 
 from mxnet.gluon import nn
 import mxnet.ndarray as nd
-from utils import concact_vectors_in_list
 
 class CapsuleConv(nn.HybridBlock):
     def __init__(self,dim_vector, out_channels, kernel_size, 
@@ -24,17 +23,23 @@ class CapsuleConv(nn.HybridBlock):
         Return:
             tesnor_squached : 5-D, (batch_size, num_channel, height, width, dim_vector)
         """
+        epsilon = 1e-9
         tensor_l2norm = (tensor**2).sum(axis=-1).expand_dims(axis=-1)
         scale_factor = tensor_l2norm / (1 + tensor_l2norm)
-        tensor_squashed = tensor * (scale_factor / tensor_l2norm**0.5)
+        tensor_squashed = tensor * (scale_factor / (tensor_l2norm+epsilon)**0.5 )
 
         return tensor_squashed
+    def concact_vectors_in_list(self, vec_list, axis):
+        concat_vec = vec_list[0]
+        for i in range(1, len(vec_list)):
+            concat_vec = nd.concat(concat_vec, vec_list[i], dim=axis)
 
+        return concat_vec
     def hybrid_forward(self,F, X):
                     
         outputs = [getattr(self,idx)(X).expand_dims(axis=-1) for idx in self.capsules_index]
 
-        outputs_cat = concact_vectors_in_list(outputs, axis=4)
+        outputs_cat = self.concact_vectors_in_list(outputs, axis=4)
         outputs_squashed = self.squash(outputs_cat)
         return outputs_squashed
 
@@ -58,9 +63,10 @@ class CapsuleDense(nn.HybridBlock):
         Return:
             tesnor_squached : 5-D, (batch_size, num_channel, height, width, dim_vector)
         """
+        epsilon = 1e-9
         tensor_l2norm = (tensor**2).sum(axis=-1).expand_dims(axis=-1)
         scale_factor = tensor_l2norm / (1 + tensor_l2norm)
-        tensor_squashed = tensor * (scale_factor / tensor_l2norm**0.5)
+        tensor_squashed = tensor * (scale_factor / (tensor_l2norm+epsilon)**0.5 )
 
         return tensor_squashed
 
@@ -78,11 +84,11 @@ class CapsuleDense(nn.HybridBlock):
         if self.routing_weight_initial:
             self.routing_weight = nd.random_normal(shape=(1,
                 self.num_capsules_prev,self.out_channels,
-                self.dim_input_vector, self.dim_vector), name='routing_weight')
+                self.dim_input_vector, self.dim_vector), name='routing_weight').as_in_context(mx.gpu(0))
             self.routing_weight_initial = False
         # (batch_size,num_capsule_prev,out_channels,dim_input_vector,dim_vector)
         # (64, 1152, 10, 8, 16)
-        W_tile = nd.tile(self.routing_weight, reps=(self.batch_size,1,1,1,1)).as_in_context(mx.gpu(0))
+        W_tile = nd.tile(self.routing_weight, reps=(self.batch_size,1,1,1,1))
         linear_combination_3d = nd.batch_dot(
                 X_tile.reshape((-1, X_tile.shape[-2], X_tile.shape[-1])), 
                 W_tile.reshape((-1, W_tile.shape[-2], W_tile.shape[-1])))
@@ -127,13 +133,3 @@ class CapsuleDense(nn.HybridBlock):
             priors = priors + U_times_v.sum(axis=0).expand_dims(axis=0)
     
         return output_squashed # v_J
-
-def main():
-    a = nd.random.uniform(shape=(64,32,6,6,8))    
-    model = CapsuleDense(16, 8, 10, num_routing_iter=3)
-    model.initialize()
-    y = model(a)
-    print(y.shape)
-if __name__ == '__main__':
-    main()
-    

@@ -1,15 +1,16 @@
 from __future__ import print_function
 import sys
-# sys.path.insert()
 import os
 import argparse
 import datetime
 import numpy as np 
 import mxnet as mx
+from tqdm import tqdm
 from mxnet.gluon import nn
+from mxnet.gluon.loss import L2Loss
 from mxnet import nd, autograd, gluon, init
-from CapsuleNet import CapsuleNet, CapsuleLoss
-from utils import try_gpu, accuracy
+from CapsuleNet import CapsuleNet, CapsuleMarginLoss
+
 mx.random.seed(1)
 os.environ['PYTHONUNBUFFERED'] = '1'
 os.environ['MXNET_CUDNN_AUTOTUNE_DEFAULT'] = '0'
@@ -17,9 +18,9 @@ os.environ['MXNET_ENABLE_GPU_P2P'] = '0'
 
 def parse_args():
     parser = argparse.ArgumentParser(description='CapsuelNet Pytorch MINIST Example')
-    parser.add_argument('--batch-size', type=int, default=64, metavar='N',
+    parser.add_argument('--batch-size', type=int, default=32, metavar='N',
                     help='input batch size for training (default: 64)')
-    parser.add_argument('--test-batch-size', type=int, default=64, metavar='N',
+    parser.add_argument('--test-batch-size', type=int, default=128, metavar='N',
                     help='input batch size for testing (default: 1000)')
     parser.add_argument('--epochs', type=int, default=10, metavar='N',
                     help='number of epochs to train (default: 10)')
@@ -40,46 +41,46 @@ def parse_args():
 def transform(data, label):
     return nd.transpose(data.astype(np.float32), (2,0,1))/255, label.astype(np.float32)
 
-def train(net,epochs, ctx, train_data, capsule_loss, 
-            batch_size):
+def train(net,epochs, ctx, train_data,test_data,
+            margin_loss, reconstructions_loss, 
+            batch_size,scale_factor):
     num_classes = 10
     trainer = gluon.Trainer(
-        net.collect_params(), 'adam')
-    prev_time = datetime.datetime.now()
+        net.collect_params(),'sgd', {'learning_rate': 0.05, 'wd': 5e-4})
 
     for epoch in range(epochs):
         train_loss = 0.0
-        train_acc = 0.0
-        for data, label in train_data:
+        for batch_idx, (data, label) in tqdm(enumerate(train_data), total=len(train_data), ncols=70, leave=False, unit='b'):
             label = label.as_in_context(ctx)
             data = data.as_in_context(ctx)
             with autograd.record():
                 prob, X_l2norm, reconstructions = net(data, label)
-                loss = capsule_loss( data, num_classes,  label, X_l2norm, reconstructions)
-            loss.backward()
+                loss1 = margin_loss(data, num_classes,  label, X_l2norm)
+                loss2 = reconstructions_loss(reconstructions, data)
+                loss = loss1 + scale_factor * loss2
+                loss.backward()
             trainer.step(batch_size)
             train_loss += nd.mean(loss).asscalar()
-            train_acc += accuracy(prob, label)
-        # for log
-        cur_time = datetime.datetime.now()
-        h, remainder = divmod((cur_time - prev_time).seconds, 3600)
-        m, s = divmod(remainder, 60)
-        time_str = 'Time %02d:%02d:%02d' % (h, m, s)
-
-        epoch_str = ('Epoch %d. Loss: %f, Train acc %f, ' % (epoch, train_loss / len(train_data), train_acc / len(train_data)))
-
-        prev_time = cur_time
-        print(epoch_str + time_str)
+        test_acc = test(test_data, net, ctx)
+        print('Epoch:{}, TrainLoss:{:.5f}, TestAcc:{}'.format(epoch,train_loss / len(train_data),test_acc))
             
-
+def test(data_iterator, net, ctx):
+    acc = mx.metric.Accuracy()
+    for i, (data, label) in tqdm(enumerate(data_iterator),total=len(data_iterator), ncols=70, leave=False, unit='b'):
+        data = data.as_in_context(ctx)
+        label = label.as_in_context(ctx)
+        prob,_,_ = net(data,label)
+        predictions = nd.argmax(prob, axis=1)
+        acc.update(preds=predictions, labels=label)
+    return acc.get()[1]
 
 def main():
     args = parse_args()
-    ctx = try_gpu()
-
-    #########################################################
-    ###                    Load Dataset                   ###
-    #########################################################
+    ctx = mx.gpu(0)
+    scale_factor = 0.0005
+    ##############################################################
+    ###                    Load Dataset                        ###
+    ##############################################################
     train_data = gluon.data.DataLoader(gluon.data.vision.MNIST(train=True,
                                 transform=transform),args.batch_size,
                                 shuffle=True)
@@ -92,25 +93,13 @@ def main():
     ##############################################################
     capsule_net = CapsuleNet()
     capsule_net.initialize(ctx=ctx, init=init.Xavier())
-    capsule_loss = CapsuleLoss()
-    train(capsule_net, args.epochs,ctx,train_data, capsule_loss,
-            args.batch_size)
+    margin_loss = CapsuleMarginLoss()
+    reconstructions_loss = L2Loss()
+    # convert to static graph for speedup
+    # capsule_net.hybridize()
+    train(capsule_net, args.epochs,ctx,train_data,test_data, margin_loss,
+            reconstructions_loss, args.batch_size, scale_factor)
 
 if __name__ == '__main__':
     main()
-# from data_dowloader import download_and_create_data
-
-
-# if __name__ == '__main__':
-#     #########################################################
-#     ###          Load Dataset and check shape             ###
-#     #########################################################
-#     trainX, trainY, testX, testY = download_and_create_data()
-
-#     print('Training Images Shape:'.format(trainX.shape))
-#     print('Training Labels Shape:'.format(trainY.shape))
-
-#     print('Test Images Shape:'.format(testX.shape))
-#     print('Test Labels Shape:'.format(testY.shape))
-
 
